@@ -1,65 +1,945 @@
-import Image from "next/image";
+"use client"
+
+import { useMemo, useState, useEffect, useRef } from "react"
+import Link from "next/link"
+import Lenis from "lenis"
+import { useUser, UserButton, SignInButton, SignUpButton } from "@clerk/nextjs"
+import { useMutation, useQuery } from "convex/react"
+import { api } from "@/convex/_generated/api"
+import { DebateResult } from "@/lib/types"
+
+import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler"
+
+//Text Animations
+import ShinyText from "./components/TextAnimations/ShinyText/Shinytext"
+import StarBorder from "./components/TextAnimations/StarBorder/StarBorder"
+// import Gradient from "./components/TextAnimations/Gradient/Gradient"
+
+//Animated Backgrounds import
+import SoftAurora from "./components/SoftAurora/SoftAurora"
+// import LiquidChrome from "./components/LiquidChrome/LiquidChrome"
+
+//icons
+import { History, MessageSquareShare, PanelLeftClose, PanelLeftOpen, Plus, SquaresExclude, TextSearch } from "lucide-react"
+
+import { useTheme } from "next-themes"
+
+
+
+type Message = {
+  role: "user" | "logic" | "emotion" | "system"
+  content: string
+}
+
+type RecentChat = {
+  _id: string
+  originalThought: string
+  rationalArgument: string
+  emotionalArgument: string
+  decision: "SAVE" | "FORGET"
+  reason: string
+  timestamp: number
+}
+
+function useTypewriter(text: string, speed = 14, start = false) {
+  const [displayed, setDisplayed] = useState("")
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    if (!start || !text) return
+    setDisplayed("")
+    setDone(false)
+    let i = 0
+    const interval = setInterval(() => {
+      i++
+      setDisplayed(text.slice(0, i))
+      if (i >= text.length) {
+        clearInterval(interval)
+        setDone(true)
+      }
+    }, speed)
+    return () => clearInterval(interval)
+  }, [text, start, speed])
+
+  return { displayed, done }
+}
+
+function TypingBubble({
+  text,
+  start,
+  voice,
+  onDone,
+}: {
+  text: string
+  start: boolean
+  voice: "logic" | "emotion"
+  onDone?: () => void
+}) {
+  const { displayed, done } = useTypewriter(text, 14, start)
+
+  useEffect(() => {
+    if (done && onDone) onDone()
+  }, [done])
+
+  const isLogic = voice === "logic"
+
+  return (
+    <div
+      className={`rounded-xl p-4 
+      ${isLogic
+        ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-800 dark:shadow-[0_0_20px_rgba(59,130,246,0.1)]"
+        : "bg-amber-50 dark:bg-amber-900/30 border border-amber-100 dark:border-amber-800 dark:shadow-[0_0_20px_rgba(59,130,246,0.1)]"
+      }`}
+    >
+      <p
+        className={`text-xs font-semibold uppercase tracking-wide mb-2 
+        ${isLogic
+          ? "text-blue-600 dark:text-blue-300"
+          : "text-amber-600 dark:text-amber-300"
+        }`}
+      >
+        {isLogic ? "Logic" : "Emotion"}
+      </p>
+  
+      <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
+        {displayed}
+        {!done && <span className="animate-pulse">▍</span>}
+      </p>
+    </div>
+  )
+}
 
 export default function Home() {
+  const { isSignedIn, user } = useUser()
+  const [thought, setThought] = useState("")
+  const [result, setResult] = useState<DebateResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+  const [hasUsedFree, setHasUsedFree] = useState(false)
+  const [savedId, setSavedId] = useState<string | null>(null)
+  const [isSaved, setIsSaved] = useState(false)
+  const [chatStatus, setChatStatus] = useState<"active" | "saved" | "dismissed">("active")
+  const [showLoginWall, setShowLoginWall] = useState(false)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [followUp, setFollowUp] = useState("")
+  const [followUpLoading, setFollowUpLoading] = useState(false)
+  const [showFollowUp, setShowFollowUp] = useState(false)
+  const [showActions, setShowActions] = useState(false)
+  const [isSidebarPinnedOpen, setIsSidebarPinnedOpen] = useState(true)
+  const [isSidebarHovered, setIsSidebarHovered] = useState(false)
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  const [optimisticRecent, setOptimisticRecent] = useState<RecentChat[]>([])
+  const [chatSearch, setChatSearch] = useState("")
+
+  const [startLogic, setStartLogic] = useState(false)
+  const [startEmotion, setStartEmotion] = useState(false)
+  const [logicDone, setLogicDone] = useState(false)
+  const [emotionDone, setEmotionDone] = useState(false)
+  const [showDecision, setShowDecision] = useState(false)
+  const { theme } = useTheme();
+
+  
+
+
+  const saveDebateMutation = useMutation(api.debates.saveDebate)
+  const markAsSaved = useMutation(api.debates.markAsSaved)
+  const recentDebates = useQuery(
+    api.debates.getRecentDebates,
+    user?.id ? { userId: user.id, limit: 20 } : "skip"
+  )
+
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    const lenis = new Lenis({
+      duration: 1.1,
+      smoothWheel: true,
+    })
+
+    let rafId = 0
+    const raf = (time: number) => {
+      lenis.raf(time)
+      rafId = requestAnimationFrame(raf)
+    }
+    rafId = requestAnimationFrame(raf)
+
+    return () => {
+      cancelAnimationFrame(rafId)
+      lenis.destroy()
+    }
+  }, [])
+
+  // Auto scroll as content grows
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, startLogic, startEmotion, showDecision, showFollowUp, showActions, followUpLoading])
+
+  useEffect(() => {
+    if (logicDone) {
+      setTimeout(() => setStartEmotion(true), 300)
+    }
+  }, [logicDone])
+
+  useEffect(() => {
+    if (emotionDone) {
+      setTimeout(() => setShowDecision(true), 400)
+      setTimeout(() => setShowActions(true), 900)
+    }
+  }, [emotionDone])
+
+  async function handleSubmit() {
+    if (!thought.trim()) return
+
+    if (hasUsedFree && !isSignedIn) {
+      setShowLoginWall(true)
+      return
+    }
+
+    setLoading(true)
+    setError("")
+    setResult(null)
+    setMessages([])
+    setStartLogic(false)
+    setStartEmotion(false)
+    setLogicDone(false)
+    setEmotionDone(false)
+    setShowDecision(false)
+    setShowFollowUp(false)
+    setShowActions(false)
+    setSavedId(null)
+    setActiveChatId(null)
+    setIsSaved(false)
+    setChatStatus("active")
+    setShowLoginWall(false)
+    const thoughtSnapshot = thought.trim()
+    const tempId = `temp-${Date.now()}`
+    setOptimisticRecent((prev) => [
+      {
+        _id: tempId,
+        originalThought: thoughtSnapshot,
+        rationalArgument: "",
+        emotionalArgument: "",
+        decision: "FORGET",
+        reason: "",
+        timestamp: Date.now(),
+      },
+      ...prev.filter((item) => item._id !== tempId),
+    ])
+    setActiveChatId(tempId)
+
+    try {
+      const res = await fetch("/api/debate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userThought: thought }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || "Something went wrong")
+      }
+      const data: DebateResult = await res.json()
+
+      const id = await saveDebateMutation({
+        ...data,
+        saved: false,
+        userId: user?.id,
+      })
+
+      setSavedId(id)
+      setActiveChatId(id as string)
+      setResult(data)
+      setMessages([
+        { role: "logic", content: data.rationalArgument },
+        { role: "emotion", content: data.emotionalArgument },
+      ])
+      setOptimisticRecent((prev) => [
+        {
+          _id: id as string,
+          originalThought: data.originalThought,
+          rationalArgument: data.rationalArgument,
+          emotionalArgument: data.emotionalArgument,
+          decision: data.decision,
+          reason: data.reason,
+          timestamp: data.timestamp,
+        },
+        ...prev.filter((item) => item._id !== tempId && item._id !== (id as string)),
+      ])
+      setHasUsedFree(true)
+      setTimeout(() => setStartLogic(true), 400)
+    } catch (e) {
+      setOptimisticRecent((prev) => prev.filter((item) => item._id !== tempId))
+      setActiveChatId(null)
+      setError(e instanceof Error ? e.message : "Failed to get a response. Please try again.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleFollowUp() {
+    if (!followUp.trim() || !isSignedIn) return
+    setFollowUpLoading(true)
+    setShowFollowUp(false)
+
+    const userMessage = followUp
+    setFollowUp("")
+
+    const newMessages: Message[] = [
+      ...messages,
+      { role: "user", content: userMessage },
+    ]
+    setMessages(newMessages)
+
+    try {
+      const res = await fetch("/api/debate/followup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          originalThought: thought,
+          messages: newMessages,
+          userMessage,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || "Something went wrong")
+      }
+      const data = await res.json()
+
+      setResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              decision: data.decision ?? prev.decision,
+              reason: data.reason ?? prev.reason,
+            }
+          : prev
+      )
+      setMessages((prev) => [
+        ...prev,
+        { role: "logic", content: data.logicReply },
+        { role: "emotion", content: data.emotionReply },
+      ])
+      setShowDecision(true)
+      setShowActions(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to get a response. Please try again.")
+    } finally {
+      setFollowUpLoading(false)
+      setShowFollowUp(true)
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }
+
+  async function handleSave() {
+    if (!isSignedIn) return
+    if (!savedId) return
+    await markAsSaved({ id: savedId as any })
+    setIsSaved(true)
+    setChatStatus("saved")
+    setShowFollowUp(false)
+    setShowActions(false)
+  }
+
+  function handleNewChat() {
+    setThought("")
+    setResult(null)
+    setError("")
+    setMessages([])
+    setFollowUp("")
+    setFollowUpLoading(false)
+    setShowFollowUp(false)
+    setShowActions(false)
+    setStartLogic(false)
+    setStartEmotion(false)
+    setLogicDone(false)
+    setEmotionDone(false)
+    setShowDecision(false)
+    setSavedId(null)
+    setActiveChatId(null)
+    setIsSaved(false)
+    setChatStatus("active")
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+
+  function handleOpenRecent(debate: {
+    _id: string
+    originalThought: string
+    rationalArgument: string
+    emotionalArgument: string
+    decision: "SAVE" | "FORGET"
+    reason: string
+    timestamp: number
+  }) {
+    setActiveChatId(debate._id)
+    setThought(debate.originalThought)
+    setResult({
+      originalThought: debate.originalThought,
+      rationalArgument: debate.rationalArgument,
+      emotionalArgument: debate.emotionalArgument,
+      decision: debate.decision,
+      reason: debate.reason,
+      timestamp: debate.timestamp,
+    })
+    setMessages([
+      { role: "logic", content: debate.rationalArgument },
+      { role: "emotion", content: debate.emotionalArgument },
+    ])
+    setShowDecision(true)
+    setShowActions(true)
+    setStartLogic(false)
+    setStartEmotion(false)
+    setLogicDone(false)
+    setEmotionDone(false)
+    setChatStatus("active")
+    setIsSaved(false)
+    setError("")
+  }
+
+  async function handleShareCurrentChat() {
+    if (!result) return
+    const shareText = `SplitSense Chat\n\nDilemma: ${result.originalThought}\nDecision: ${result.decision}\nReason: ${result.reason}`
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({ title: "SplitSense Chat", text: shareText })
+        return
+      } catch {
+        // fall through to clipboard
+      }
+    }
+    await navigator.clipboard.writeText(shareText)
+  }
+
+  const conversationMessages = messages.slice(2)
+  const recentMerged = [
+    ...optimisticRecent.filter((item) => !recentDebates?.some((d) => d._id === item._id)),
+    ...(recentDebates ?? []),
+  ]
+  const filteredRecentChats = useMemo(() => {
+    const term = chatSearch.trim().toLowerCase()
+    if (!term) return recentMerged
+    return recentMerged.filter((chat) => chat.originalThought.toLowerCase().includes(term))
+  }, [chatSearch, recentMerged])
+  const isSidebarExpanded = isSidebarPinnedOpen || isSidebarHovered
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="relative min-h-screen bg-transparent text-gray-900 dark:text-white flex transition-colors duration-300">
+          {/* Background 1*/}
+      <div className="fixed inset-0 -z-10">
+        <SoftAurora
+          speed={0.4}
+          scale={1.5}
+          brightness={0.8}
+          color1="#e0e7ff"
+          color2="#fefce8"
+          noiseFrequency={2.5}
+          noiseAmplitude={1}
+          bandHeight={0.5}
+          bandSpread={1}
+          octaveDecay={0.1}
+          layerOffset={0}
+          colorSpeed={1}
+          enableMouseInteraction
+          mouseInfluence={0.25}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+      </div>
+
+      {/* Background 2*/}
+      {/* <div className="fixed inset-0 -z-10">
+          <LiquidChrome
+            baseColor={[0.1, 0.1, 0.1]}
+            speed={0.5}
+            amplitude={0.4}
+            interactive={true}
+          />
+        </div> */}
+      <aside
+        onMouseEnter={() => setIsSidebarHovered(true)}
+        onMouseLeave={() => setIsSidebarHovered(false)}
+        data-lenis-prevent
+        className={`group 
+          border-r border-gray-100 dark:border-zinc-800 
+          bg-gray-50/70 dark:bg-zinc-900/80 
+          sticky top-0 h-screen overflow-y-auto 
+          transition-all duration-500 ease-in-out ${
+            isSidebarExpanded ? "w-72 px-3 py-4" : "w-16 px-2 py-4"
+        }`}
+      >
+        <div className="mt-2 mb-4">
+        {isSidebarExpanded ? (
+          <div
+            className="relative px-2 py-2 rounded-md 
+            hover:bg-gray-200 dark:hover:bg-zinc-800 
+            transition-colors"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      <div className="flex items-center">
+        <SquaresExclude className="w-5 h-5 text-gray-800 dark:text-gray-200" />
+      </div>
+
+      <button
+        onClick={() => setIsSidebarPinnedOpen((prev) => !prev)}
+        className="absolute right-1 top-1/2 -translate-y-1/2 
+        p-1.5 rounded-md 
+        border border-gray-200 dark:border-zinc-700 
+        bg-white dark:bg-zinc-800 
+        opacity-0 group-hover:opacity-100 
+        transition-opacity"
+        aria-label={isSidebarPinnedOpen ? "Unpin sidebar" : "Pin sidebar open"}
+      >
+        {isSidebarPinnedOpen ? (
+          <PanelLeftClose className="w-4 h-4 text-gray-700 dark:text-gray-300" />
+        ) : (
+          <PanelLeftOpen className="w-4 h-4 text-gray-700 dark:text-gray-300" />
+        )}
+      </button>
     </div>
-  );
+    ) : (
+    <div
+      className="group relative flex justify-center py-2 rounded-md 
+      hover:bg-gray-200 dark:hover:bg-zinc-800 
+      transition-colors"
+    >
+      <SquaresExclude className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+    </div>
+  )}
+</div>
+
+        {isSidebarExpanded ? (
+          <>
+          <div className="mb-4">
+            <button
+              onClick={handleNewChat}
+              className="w-full bg-gray-900 text-white  dark:bg-white dark:text-black py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
+            >
+              + New chat
+            </button>
+          </div>
+          <div className="mb-4">
+            <Link
+              href="/history"
+              className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 transition-colors px-2 py-2 rounded-md hover:bg-gray-200 dark:hover:bg-zinc-800"
+            >
+              <History className="w-4 h-4" />
+              View history
+            </Link>
+          </div>
+          <div className="mb-3 px-1">
+            <div className="flex items-center gap-2 border border-gray-200 rounded-md bg-white px-2 py-1.5">
+              <TextSearch className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <input
+                value={chatSearch}
+                onChange={(e) => setChatSearch(e.target.value)}
+                placeholder="Search chats..."
+                className="w-full text-sm text-gray-700 dark:text-gray-300 bg-transparent outline-none dark:placeholder-gray-500"
+              />
+            </div>
+          </div>
+          <p className="text-xs uppercase tracking-wide text-gray-400 px-2 mb-2">Recent chats</p>
+          <div className="space-y-1">
+            {filteredRecentChats.map((debate) => (
+              <button
+                key={debate._id}
+                onClick={() =>
+                  handleOpenRecent({
+                    _id: debate._id as string,
+                    originalThought: debate.originalThought,
+                    rationalArgument: debate.rationalArgument,
+                    emotionalArgument: debate.emotionalArgument,
+                    decision: debate.decision,
+                    reason: debate.reason,
+                    timestamp: debate.timestamp,
+                  })
+                }
+                className={`w-full text-left px-2 py-2 rounded-md transition-colors ${
+                  activeChatId === debate._id ? "bg-gray-200 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700" : "hover:bg-gray-200 dark:hover:bg-zinc-800"
+                }`}
+                title={debate.originalThought}
+              >
+                <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">{debate.originalThought}</p>
+              </button>
+            ))}
+            {isSignedIn && recentMerged.length === 0 && (
+              <p className="text-xs text-gray-400 px-2">No chats yet.</p>
+            )}
+            {!isSignedIn && (
+              <p className="text-xs text-gray-400 px-2">Sign in to see recent chats.</p>
+            )}
+          </div>
+          </>
+        ) : (
+          <div className="mt-2 flex flex-col items-center gap-3">
+            <Link
+              href="/"
+              className="p-2 rounded-full bg-black text-white hover:bg-gray-800 transition-colors"
+              aria-label="New chat"
+              title="New chat"
+            >
+              <Plus className="w-4 h-4" />
+            </Link>
+            <Link
+              href="/history"
+              className="p-2 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-zinc-800 transition-colors"
+              aria-label="View history"
+              title="View history"
+            >
+              <History className="w-4 h-4" />
+            </Link>
+            <button
+              onClick={() => setIsSidebarPinnedOpen(true)}
+              className="p-2 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-zinc-800 transition-colors opacity-0 group-hover:opacity-100"
+              aria-label="Search chats"
+              title="Search chats"
+            >
+              <TextSearch className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+      </aside>
+
+      <div className="flex-1">
+            {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 
+            sticky top-0 z-10 
+            bg-white/60 dark:bg-zinc-900/60 
+            backdrop-blur-md 
+            border-b border-white/10 dark:border-white/5 
+            transition-colors duration-300">
+
+          <div className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-2">
+              <SquaresExclude className="w-6 h-6 text-gray-800 dark:text-gray-200 mr-2" />
+              <h1 className="text-xl font-semibold tracking-tight">SplitSense
+              </h1>
+            </Link>
+          </div>
+
+          <div>
+            {isSignedIn ? (
+              <UserButton />
+            ) : (
+              <SignInButton mode="modal">
+                <button className="text-sm text-gray-500 dark:text-gray-400 
+                hover:text-gray-900 dark:hover:text-white 
+                transition-colors cursor-pointer">
+                  Login
+                </button>
+              </SignInButton>
+            )}
+          </div>
+
+        </div>
+
+      {/* Hero input */}
+      <div className="relative">
+  {!result && (
+    <div className="absolute inset-0 -z-10">
+      {/* <SoftAurora
+        speed={0.4}
+        scale={1.5}
+        brightness={0.8}
+        color1="#e0e7ff"
+        color2="#fefce8"
+        noiseFrequency={2.5}
+        noiseAmplitude={1}
+        bandHeight={0.5}
+        bandSpread={1}
+        octaveDecay={0.1}
+        layerOffset={0}
+        colorSpeed={1}
+        enableMouseInteraction
+        mouseInfluence={0.25}
+      /> */}
+    </div>
+  )}
+        <div className="max-w-2xl mx-auto px-6 pt-16 pb-10">
+          
+          <h2 className="text-4xl font-bold tracking-tight text-gray-900 dark:text-white mb-3">
+            <ShinyText
+              text="What's on your mind?"
+              speed={3}
+              delay={0}
+              color={theme === "dark" ? "#b5b5b5" : "#1f2937"}
+              shineColor="#ffffff"
+              spread={120}
+              direction="left"
+              yoyo={false}
+              pauseOnHover={false}
+              disabled={false}
+            />
+          </h2>
+          <p className="text-gray-500 text-lg mb-10">Let logic and emotion decide.</p>
+
+          <div className="space-y-3">
+          <textarea
+              value={thought}
+              onChange={(e) => setThought(e.target.value)}
+              placeholder="Should I quit my job and start a startup..."
+              rows={4}
+              className="w-full border border-gray-200 dark:border-zinc-700 
+              rounded-xl px-4 py-3 
+              text-gray-900 dark:text-white 
+              bg-white dark:bg-zinc-800 
+              placeholder-gray-400 dark:placeholder-gray-500 
+              focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-white 
+              resize-none text-base"
+            />
+            <StarBorder
+                as="button"
+                onClick={handleSubmit}
+                disabled={loading || !thought.trim()}
+                color="#baf9ff"
+                speed="5s"
+                className="w-full min-w-[180px] 
+                bg-white/10 dark:bg-white/10 
+                backdrop-blur-md 
+                text-white dark:text-white 
+                py-3 rounded-xl font-medium 
+                hover:bg-white/30 
+                transition-all 
+                disabled:opacity-50 disabled:cursor-not-allowed 
+                flex items-center justify-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <svg
+                      className="animate-spin h-4 w-4 text-white dark:text-black opacity-0 absolute"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v8z"
+                      />
+                    </svg>
+                    Thinking...
+                  </>
+                ) : (
+                  "Help me Decide"
+                )}
+              </StarBorder>
+          </div>
+
+          {error && <p className="mt-4 text-red-500 text-sm">{error}</p>}
+
+          {showLoginWall && (
+            <div className="mt-6 border border-gray-200 rounded-xl p-6 text-center space-y-3">
+              <p className="font-medium text-gray-900">You've used your free debate</p>
+              <p className="text-sm text-gray-500">Sign up free to keep splitting your thoughts</p>
+              <SignUpButton mode="modal">
+                <button className="bg-gray-900 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors">
+                  Sign up free
+                </button>
+              </SignUpButton>
+            </div>
+          )}
+        </div>
+
+        {/* Chat area */}
+        {result && (
+          <div className="max-w-2xl mx-auto px-6 pb-32 space-y-4">
+            {/* Original thought */}
+            <div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-gray-500 dark:bg-zinc-800">
+              <span className="font-medium text-gray-700 dark:text-white">Your thought: </span>
+              {result.originalThought}
+              <p className="text-xs text-gray-400 mt-2">
+                {new Date(result.timestamp).toLocaleString("en-IN", {
+                  year: "numeric",
+                  month: "short",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </p>
+            </div>
+
+            {/* Initial Logic */}
+            {startLogic && (
+              <TypingBubble
+                text={result.rationalArgument}
+                start={startLogic}
+                voice="logic"
+                onDone={() => setLogicDone(true)}
+              />
+            )}
+
+            {/* Initial Emotion */}
+            {startEmotion && (
+              <TypingBubble
+                text={result.emotionalArgument}
+                start={startEmotion}
+                voice="emotion"
+                onDone={() => setEmotionDone(true)}
+              />
+            )}
+
+            {/* Decision */}
+            {showDecision && (
+              <div className="border border-gray-100 rounded-xl p-5 text-center space-y-2">
+                <p className="text-md text-gray-700 dark:text-gray-300 font-bold">Decision</p>
+                <p className="text-base font-bold text-gray-900">
+                  {result?.decision === "SAVE" ? <span className="text-green-600">Yes</span> : <span className="text-red-600">No</span>}
+                </p>
+                <p className="text-md dark:text-gray-400 text-gray-700 text-sm pt-1 italic font-serif">{result.reason}</p>
+              </div>
+            )}
+
+            {/* Follow-up conversation messages */}
+            {conversationMessages.map((msg, i) => (
+              <div key={i}>
+                {msg.role === "user" && (
+                  <div className="flex justify-end">
+                    <div className="bg-gray-900 text-white rounded-xl px-4 py-3 text-sm max-w-xs leading-relaxed">
+                      {msg.content}
+                    </div>
+                  </div>
+                )}
+                {(msg.role === "logic" || msg.role === "emotion") && (
+                  <TypingBubble
+                    key={`${i}-${msg.role}-${msg.content}`}
+                    text={msg.content}
+                    start={true}
+                    voice={msg.role}
+                  />
+                )}
+              </div>
+            ))}
+
+            {followUpLoading && (
+              <div className="flex items-center gap-2 text-gray-400 text-sm">
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+                Thinking...
+              </div>
+            )}
+
+            {/* Follow-up input */}
+            {showActions && chatStatus === "active" && (
+              <div className="space-y-3 pt-2">
+                {isSignedIn ? (
+                  <>
+                    <div className="flex gap-2">
+                      <textarea
+                        ref={inputRef}
+                        value={followUp}
+                        onChange={(e) => setFollowUp(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault()
+                            handleFollowUp()
+                          }
+                        }}
+                        placeholder="Counter their argument or ask more..."
+                        rows={2}
+                        className="flex-1 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white dark:bg-zinc-800 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-white resize-none"
+                      />
+                      <button
+                        onClick={handleFollowUp}
+                        disabled={!followUp.trim() || followUpLoading}
+                        className="bg-gray-900 text-white dark:bg-white dark:text-black px-4 rounded-xl text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Send
+                      </button>
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleSave}
+                        className="flex-1 
+                        bg-gray-900 text-white 
+                        dark:bg-white dark:text-black 
+                        py-2.5 rounded-xl text-sm font-medium 
+                        hover:bg-gray-700 dark:hover:bg-gray-200 
+                        transition-colors"
+                      >
+                        save
+                      </button>
+                      <button
+                        onClick={() => {
+                          // Dismiss means: do not mark saved in DB.
+                          // The debate doc is created with a 30-day expiry and will be deleted then.
+                          setIsSaved(false)
+                          setChatStatus("dismissed")
+                          setShowFollowUp(false)
+                          setShowActions(false)
+                        }}
+                        className="flex-1 border border-gray-200 text-gray-500 py-2.5 rounded-xl text-sm font-medium hover:border-gray-400 hover:text-gray-700 dark:text-gray-300 transition-colors"
+                      >
+                        dismiss
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="border border-gray-200 rounded-xl p-5 text-center space-y-3">
+                    <p className="font-medium text-gray-900 text-sm">Want to continue the conversation?</p>
+                    <p className="text-xs text-gray-400">Sign up free to counter argue, save debates and view history</p>
+                    <div className="flex gap-2 justify-center">
+                        <SignUpButton
+                          mode="modal"
+                        >
+                          <button className="bg-gray-900 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors cursor-pointer">
+                            Sign up for free
+                          </button>
+                        </SignUpButton>
+
+                        <SignInButton
+                          mode="modal"
+                        >
+                          <button className="border border-gray-200 text-gray-600 px-5 py-2 rounded-lg text-sm font-medium hover:border-gray-400 transition-colors cursor-pointer">
+                            Sign in
+                          </button>
+                        </SignInButton>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isSaved && (
+              <p className="text-center text-xs text-green-500 pb-4">✓ Saved to your history</p>
+            )}
+
+            {chatStatus !== "active" && (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleNewChat}
+                  className="flex-1 border border-gray-200 text-gray-700 dark:text-gray-300 py-2.5 rounded-xl text-sm font-medium hover:border-gray-400 transition-colors"
+                >
+                  New chat
+                </button>
+                <button
+                  onClick={handleShareCurrentChat}
+                  className="px-3 border border-gray-200 text-gray-700 dark:text-gray-300 rounded-xl text-sm hover:border-gray-400 transition-colors"
+                  aria-label="Share chat"
+                  title="Share chat"
+                >
+                  <MessageSquareShare className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+        </div>
+
+        {/* Theme Toggler */}
+        <div className="fixed bottom-6 right-6 z-50">
+          <AnimatedThemeToggler />
+        </div>
+        
+      </div>
+    </main>
+  )
 }
