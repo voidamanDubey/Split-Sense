@@ -7,6 +7,8 @@ import { useUser, UserButton, SignInButton, SignUpButton } from "@clerk/nextjs"
 import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
 import { DebateResult } from "@/lib/types"
+import type { StoredDecision } from "@/lib/decision"
+import { decisionIsYes } from "@/lib/decision"
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler"
 
@@ -20,7 +22,7 @@ import SoftAurora from "./components/SoftAurora/SoftAurora"
 // import LiquidChrome from "./components/LiquidChrome/LiquidChrome"
 
 //icons
-import { History, MessageSquareShare, PanelLeftClose, PanelLeftOpen, Plus, SquaresExclude, TextSearch } from "lucide-react"
+import { History, MessageSquareShare, PanelLeftClose, PanelLeftOpen, Pencil, Plus, SquaresExclude, TextSearch, Trash2 } from "lucide-react"
 
 import { useTheme } from "next-themes"
 
@@ -36,16 +38,40 @@ type RecentChat = {
   originalThought: string
   rationalArgument: string
   emotionalArgument: string
-  decision: "SAVE" | "FORGET"
+  decision: StoredDecision
   reason: string
   timestamp: number
 }
 
-function useTypewriter(text: string, speed = 14, start = false) {
+function normalizeTimestamp(ts: number) {
+  // If the model or DB stored unix seconds, convert to milliseconds.
+  return ts < 1_000_000_000_000 ? ts * 1000 : ts
+}
+
+function useTypewriter(text: string, speed = 14, start = false, instant = false) {
   const [displayed, setDisplayed] = useState("")
   const [done, setDone] = useState(false)
+  const completedRef = useRef(false)
+  const lastTextRef = useRef<string>("")
 
   useEffect(() => {
+    // If the text changed, allow animation again (new bubble content).
+    if (lastTextRef.current !== text) {
+      lastTextRef.current = text
+      completedRef.current = false
+    }
+
+    // Once a bubble has finished (or was instantly rendered), never re-animate it
+    // unless its text changes.
+    if (completedRef.current) return
+
+    if (instant) {
+      setDisplayed(text ?? "")
+      setDone(true)
+      completedRef.current = true
+      return
+    }
+
     if (!start || !text) return
     setDisplayed("")
     setDone(false)
@@ -56,10 +82,11 @@ function useTypewriter(text: string, speed = 14, start = false) {
       if (i >= text.length) {
         clearInterval(interval)
         setDone(true)
+        completedRef.current = true
       }
     }, speed)
     return () => clearInterval(interval)
-  }, [text, start, speed])
+  }, [text, start, speed, instant])
 
   return { displayed, done }
 }
@@ -69,13 +96,15 @@ function TypingBubble({
   start,
   voice,
   onDone,
+  instant = false,
 }: {
   text: string
   start: boolean
   voice: "logic" | "emotion"
   onDone?: () => void
+  instant?: boolean
 }) {
-  const { displayed, done } = useTypewriter(text, 14, start)
+  const { displayed, done } = useTypewriter(text, 14, start, instant)
 
   useEffect(() => {
     if (done && onDone) onDone()
@@ -130,12 +159,16 @@ export default function Home() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [optimisticRecent, setOptimisticRecent] = useState<RecentChat[]>([])
   const [chatSearch, setChatSearch] = useState("")
+  const [chatTitleEdits, setChatTitleEdits] = useState<Map<string, string>>(new Map())
+  const [editingChatId, setEditingChatId] = useState<string | null>(null)
+  const [editingChatTitle, setEditingChatTitle] = useState<string>("")
 
   const [startLogic, setStartLogic] = useState(false)
   const [startEmotion, setStartEmotion] = useState(false)
   const [logicDone, setLogicDone] = useState(false)
   const [emotionDone, setEmotionDone] = useState(false)
   const [showDecision, setShowDecision] = useState(false)
+  const [restoreInstant, setRestoreInstant] = useState(false)
   const { theme } = useTheme();
 
   
@@ -143,6 +176,8 @@ export default function Home() {
 
   const saveDebateMutation = useMutation(api.debates.saveDebate)
   const markAsSaved = useMutation(api.debates.markAsSaved)
+  const deleteDebateMutation = useMutation(api.debates.deleteDebate)
+  const ensureShareLinkMutation = useMutation(api.debates.ensureShareLink)
   const recentDebates = useQuery(
     api.debates.getRecentDebates,
     user?.id ? { userId: user.id, limit: 20 } : "skip"
@@ -150,6 +185,25 @@ export default function Home() {
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  const AUTH_DRAFT_KEY = "splitSenseAuthDraftV1"
+  const restoreInFlightRef = useRef(false)
+
+  function persistDraftForAuth() {
+    try {
+      if (typeof window === "undefined") return
+      sessionStorage.setItem(
+        AUTH_DRAFT_KEY,
+        JSON.stringify({
+          thought,
+          result,
+          messages,
+        })
+      )
+    } catch {
+      // best-effort only
+    }
+  }
 
   useEffect(() => {
     const lenis = new Lenis({
@@ -169,6 +223,79 @@ export default function Home() {
       lenis.destroy()
     }
   }, [])
+
+  // If auth changes (Clerk modal) and we had an active draft, restore it from sessionStorage.
+  useEffect(() => {
+    if (!isSignedIn) return
+    if (savedId !== null) return
+    if (!user?.id) return
+    if (restoreInFlightRef.current) return
+
+    const raw = (() => {
+      try {
+        return sessionStorage.getItem(AUTH_DRAFT_KEY)
+      } catch {
+        return null
+      }
+    })()
+    if (!raw) return
+
+    const draft = JSON.parse(raw) as {
+      thought?: string
+      result?: DebateResult | null
+      messages?: Message[]
+    }
+    if (!draft.thought || !draft.result || !draft.messages) return
+
+    restoreInFlightRef.current = true
+    setRestoreInstant(true)
+    setThought(draft.thought)
+    setResult(draft.result)
+    setMessages(draft.messages)
+    setIsSaved(false)
+    setChatStatus("active")
+    setShowDecision(true)
+    setShowActions(true)
+    // Ensure the conversation sections actually render after restore.
+    if (draft.messages.some((m) => m.role === "logic")) {
+      setStartLogic(true)
+      setLogicDone(true)
+    }
+    if (draft.messages.some((m) => m.role === "emotion")) {
+      setStartEmotion(true)
+      setEmotionDone(true)
+    }
+
+    saveDebateMutation({
+      ...draft.result,
+      saved: false,
+      userId: user.id,
+    })
+      .then((id) => {
+        setSavedId(id)
+        setActiveChatId(id as string)
+        // Remove any anonymous "temp-..." entry for the same draft to avoid duplicates.
+        setOptimisticRecent((prev) =>
+          prev.filter(
+            (c) =>
+              !(
+                typeof c._id === "string" &&
+                c._id.startsWith("temp-") &&
+                c.originalThought === draft.result!.originalThought
+              )
+          )
+        )
+      })
+      .finally(() => {
+        try {
+          sessionStorage.removeItem(AUTH_DRAFT_KEY)
+        } catch {
+          // ignore
+        }
+        setRestoreInstant(false)
+        restoreInFlightRef.current = false
+      })
+  }, [isSignedIn, savedId, user?.id, saveDebateMutation])
 
   // Auto scroll as content grows
   useEffect(() => {
@@ -220,7 +347,7 @@ export default function Home() {
         originalThought: thoughtSnapshot,
         rationalArgument: "",
         emotionalArgument: "",
-        decision: "FORGET",
+        decision: "NO",
         reason: "",
         timestamp: Date.now(),
       },
@@ -240,14 +367,18 @@ export default function Home() {
       }
       const data: DebateResult = await res.json()
 
-      const id = await saveDebateMutation({
-        ...data,
-        saved: false,
-        userId: user?.id,
-      })
+      // Only persist to Convex when signed in. If signed out, keep it local
+      // and let the post-login restore save it once with the real userId.
+      const id = user?.id
+        ? await saveDebateMutation({
+            ...data,
+            saved: false,
+            userId: user.id,
+          })
+        : null
 
       setSavedId(id)
-      setActiveChatId(id as string)
+      setActiveChatId((id as string) ?? tempId)
       setResult(data)
       setMessages([
         { role: "logic", content: data.rationalArgument },
@@ -255,7 +386,7 @@ export default function Home() {
       ])
       setOptimisticRecent((prev) => [
         {
-          _id: id as string,
+          _id: (id as string) ?? tempId,
           originalThought: data.originalThought,
           rationalArgument: data.rationalArgument,
           emotionalArgument: data.emotionalArgument,
@@ -279,7 +410,8 @@ export default function Home() {
   async function handleFollowUp() {
     if (!followUp.trim() || !isSignedIn) return
     setFollowUpLoading(true)
-    setShowFollowUp(false)
+    // Force the decision to refresh per turn (avoid showing stale decision while thinking).
+    setShowDecision(false)
 
     const userMessage = followUp
     setFollowUp("")
@@ -306,15 +438,24 @@ export default function Home() {
       }
       const data = await res.json()
 
-      setResult((prev) =>
-        prev
-          ? {
-              ...prev,
-              decision: data.decision ?? prev.decision,
-              reason: data.reason ?? prev.reason,
-            }
-          : prev
-      )
+      setResult((prev) => {
+        const base: DebateResult =
+          prev ??
+          ({
+            originalThought: thought,
+            rationalArgument: "",
+            emotionalArgument: "",
+            decision: data.decision ?? "NO",
+            reason: data.reason ?? "",
+            timestamp: Date.now(),
+          } as DebateResult)
+
+        return {
+          ...base,
+          decision: data.decision ?? base.decision,
+          reason: data.reason ?? base.reason,
+        }
+      })
       setMessages((prev) => [
         ...prev,
         { role: "logic", content: data.logicReply },
@@ -367,7 +508,7 @@ export default function Home() {
     originalThought: string
     rationalArgument: string
     emotionalArgument: string
-    decision: "SAVE" | "FORGET"
+    decision: StoredDecision
     reason: string
     timestamp: number
   }) {
@@ -398,21 +539,25 @@ export default function Home() {
 
   async function handleShareCurrentChat() {
     if (!result) return
-    const shareText = `SplitSense Chat\n\nDilemma: ${result.originalThought}\nDecision: ${result.decision}\nReason: ${result.reason}`
+    if (!user?.id || !savedId) return
+    const shareId = await ensureShareLinkMutation({ id: savedId as any, userId: user.id })
+    const url = `${window.location.origin}/share/${shareId}`
     if (typeof navigator !== "undefined" && navigator.share) {
       try {
-        await navigator.share({ title: "SplitSense Chat", text: shareText })
+        await navigator.share({ title: "SplitSense Chat", url })
         return
       } catch {
         // fall through to clipboard
       }
     }
-    await navigator.clipboard.writeText(shareText)
+    await navigator.clipboard.writeText(url)
   }
 
   const conversationMessages = messages.slice(2)
   const recentMerged = [
-    ...optimisticRecent.filter((item) => !recentDebates?.some((d) => d._id === item._id)),
+    ...optimisticRecent.filter(
+      (item) => !recentDebates?.some((d) => String(d._id) === String(item._id))
+    ),
     ...(recentDebates ?? []),
   ]
   const filteredRecentChats = useMemo(() => {
@@ -456,19 +601,17 @@ export default function Home() {
       <aside
         onMouseEnter={() => setIsSidebarHovered(true)}
         onMouseLeave={() => setIsSidebarHovered(false)}
-        data-lenis-prevent
-        className={`group 
-          border-r border-gray-100 dark:border-zinc-800 
+        className={`flex flex-col border-r border-gray-100 dark:border-zinc-800 
           bg-gray-50/70 dark:bg-zinc-900/80 
-          sticky top-0 h-screen overflow-y-auto 
+          sticky top-0 h-screen min-h-0 overflow-hidden 
           transition-all duration-500 ease-in-out ${
             isSidebarExpanded ? "w-72 px-3 py-4" : "w-16 px-2 py-4"
         }`}
       >
-        <div className="mt-2 mb-4">
+        <div className="mt-2 mb-4 shrink-0">
         {isSidebarExpanded ? (
           <div
-            className="relative px-2 py-2 rounded-md 
+            className="group relative px-2 py-2 rounded-md 
             hover:bg-gray-200 dark:hover:bg-zinc-800 
             transition-colors"
             >
@@ -506,7 +649,7 @@ export default function Home() {
 
         {isSidebarExpanded ? (
           <>
-          <div className="mb-4">
+          <div className="mb-4 shrink-0">
             <button
               onClick={handleNewChat}
               className="w-full bg-gray-900 text-white  dark:bg-white dark:text-black py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
@@ -514,7 +657,7 @@ export default function Home() {
               + New chat
             </button>
           </div>
-          <div className="mb-4">
+          <div className="mb-4 shrink-0">
             <Link
               href="/history"
               className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 transition-colors px-2 py-2 rounded-md hover:bg-gray-200 dark:hover:bg-zinc-800"
@@ -523,7 +666,7 @@ export default function Home() {
               View history
             </Link>
           </div>
-          <div className="mb-3 px-1">
+          <div className="mb-3 px-1 shrink-0">
             <div className="flex items-center gap-2 border border-gray-200 rounded-md bg-white px-2 py-1.5">
               <TextSearch className="w-4 h-4 text-gray-500 dark:text-gray-400" />
               <input
@@ -534,30 +677,138 @@ export default function Home() {
               />
             </div>
           </div>
-          <p className="text-xs uppercase tracking-wide text-gray-400 px-2 mb-2">Recent chats</p>
-          <div className="space-y-1">
-            {filteredRecentChats.map((debate) => (
-              <button
-                key={debate._id}
-                onClick={() =>
-                  handleOpenRecent({
-                    _id: debate._id as string,
-                    originalThought: debate.originalThought,
-                    rationalArgument: debate.rationalArgument,
-                    emotionalArgument: debate.emotionalArgument,
-                    decision: debate.decision,
-                    reason: debate.reason,
-                    timestamp: debate.timestamp,
-                  })
-                }
-                className={`w-full text-left px-2 py-2 rounded-md transition-colors ${
-                  activeChatId === debate._id ? "bg-gray-200 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700" : "hover:bg-gray-200 dark:hover:bg-zinc-800"
-                }`}
-                title={debate.originalThought}
-              >
-                <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">{debate.originalThought}</p>
-              </button>
-            ))}
+          <p className="text-xs uppercase tracking-wide text-gray-400 px-2 mb-2 shrink-0">Recent chats</p>
+          <div
+            data-lenis-prevent
+            className="min-h-0 flex-1 overflow-y-auto space-y-1 overscroll-contain"
+          >
+            {filteredRecentChats.map((debate) => {
+              const id = debate._id as string
+              const displayTitle = chatTitleEdits.get(id) ?? debate.originalThought
+              const words = displayTitle.trim().split(/\s+/)
+              const firstFive = words.slice(0, 5).join(" ")
+              const truncated = words.length > 5 ? `${firstFive}...` : firstFive
+              const isEditing = editingChatId === id
+
+              return (
+                <div
+                  key={id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (isEditing) return
+                    handleOpenRecent({
+                      _id: id,
+                      originalThought: debate.originalThought,
+                      rationalArgument: debate.rationalArgument,
+                      emotionalArgument: debate.emotionalArgument,
+                      decision: debate.decision,
+                      reason: debate.reason,
+                      timestamp: debate.timestamp,
+                    })
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      ;(e.currentTarget as HTMLDivElement).click()
+                    }
+                  }}
+                  className={`group w-full cursor-pointer select-none text-left px-2 py-2 rounded-md transition-colors ${
+                    activeChatId === debate._id
+                      ? "bg-gray-200 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700"
+                      : "hover:bg-gray-200 dark:hover:bg-zinc-800"
+                  }`}
+                  title={displayTitle}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          value={editingChatTitle}
+                          onChange={(e) => setEditingChatTitle(e.target.value)}
+                          onBlur={() => {
+                            const trimmed = editingChatTitle.trim()
+                            setChatTitleEdits((prev) => {
+                              const next = new Map(prev)
+                              if (trimmed) next.set(id, trimmed)
+                              else next.delete(id)
+                              return next
+                            })
+                            setEditingChatId(null)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur()
+                            if (e.key === "Escape") setEditingChatId(null)
+                          }}
+                          className="w-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-md px-2 py-1 text-sm text-gray-900 dark:text-white outline-none"
+                        />
+                      ) : (
+                        <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">{truncated}</p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        className="p-1 rounded-md hover:bg-white dark:hover:bg-zinc-700 transition-colors"
+                        aria-label="Edit chat title"
+                        title="Edit"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingChatId(id)
+                          setEditingChatTitle(displayTitle)
+                        }}
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
+                      </button>
+                      <button
+                        type="button"
+                        className="p-1 rounded-md hover:bg-white dark:hover:bg-zinc-700 transition-colors"
+                        aria-label="Share chat"
+                        title="Share"
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          if (!user?.id) return
+                          const shareId = await ensureShareLinkMutation({ id: id as any, userId: user.id })
+                          const url = `${window.location.origin}/share/${shareId}`
+                          if (typeof navigator !== "undefined" && navigator.share) {
+                            try {
+                              await navigator.share({ title: "SplitSense Chat", url })
+                              return
+                            } catch {
+                              // fall through to clipboard
+                            }
+                          }
+                          await navigator.clipboard.writeText(url)
+                        }}
+                      >
+                        <MessageSquareShare className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
+                      </button>
+                      <button
+                        type="button"
+                        className="p-1 rounded-md hover:bg-white dark:hover:bg-zinc-700 transition-colors"
+                        aria-label="Delete chat"
+                        title="Delete"
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          if (!user?.id) return
+                          const idToDelete = id
+                          // Optimistic remove from sidebar list.
+                          setOptimisticRecent((prev) => prev.filter((c) => c._id !== idToDelete))
+                          if (activeChatId === idToDelete) {
+                            handleNewChat()
+                          }
+                          await deleteDebateMutation({ id: idToDelete as any, userId: user.id })
+                        }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
             {isSignedIn && recentMerged.length === 0 && (
               <p className="text-xs text-gray-400 px-2">No chats yet.</p>
             )}
@@ -596,7 +847,7 @@ export default function Home() {
         )}
       </aside>
 
-      <div className="flex-1">
+      <div className="flex-1 bg-transparent">
             {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 
             sticky top-0 z-10 
@@ -618,7 +869,7 @@ export default function Home() {
               <UserButton />
             ) : (
               <SignInButton mode="modal">
-                <button className="text-sm text-gray-500 dark:text-gray-400 
+                <button onClick={persistDraftForAuth} className="text-sm text-gray-500 dark:text-gray-400 
                 hover:text-gray-900 dark:hover:text-white 
                 transition-colors cursor-pointer">
                   Login
@@ -667,12 +918,18 @@ export default function Home() {
               disabled={false}
             />
           </h2>
-          <p className="text-gray-500 text-lg mb-10">Let logic and emotion decide.</p>
+          <p className=" text-gray-500 text-lg mb-10">Let logic and emotion decide.</p>
 
           <div className="space-y-3">
           <textarea
               value={thought}
               onChange={(e) => setThought(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  if (!loading && thought.trim()) handleSubmit()
+                }
+              }}
               placeholder="Should I quit my job and start a startup..."
               rows={4}
               className="w-full border border-gray-200 dark:border-zinc-700 
@@ -684,49 +941,49 @@ export default function Home() {
               resize-none text-base"
             />
             <StarBorder
-                as="button"
-                onClick={handleSubmit}
-                disabled={loading || !thought.trim()}
-                color="#baf9ff"
-                speed="5s"
-                className="w-full min-w-[180px] 
-                bg-white/10 dark:bg-white/10 
-                backdrop-blur-md 
-                text-white dark:text-white 
-                py-3 rounded-xl font-medium 
-                hover:bg-white/30 
-                transition-all 
-                disabled:opacity-50 disabled:cursor-not-allowed 
-                flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <svg
-                      className="animate-spin h-4 w-4 text-white dark:text-black opacity-0 absolute"
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8v8z"
-                      />
-                    </svg>
-                    Thinking...
-                  </>
-                ) : (
-                  "Help me Decide"
-                )}
-              </StarBorder>
+              as="button"
+              onClick={handleSubmit}
+              disabled={loading || !thought.trim()}
+              color="#baf9ff"
+              speed="5s"
+              className="w-full min-w-[180px] 
+              bg-white/10 dark:bg-white/10 
+              backdrop-blur-md 
+              text-white dark:text-white 
+              py-3 rounded-xl font-medium 
+              hover:bg-white/30 
+              transition-all 
+              disabled:opacity-50 disabled:cursor-not-allowed 
+              flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <svg
+                    className="animate-spin h-4 w-4 text-white dark:text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v8z"
+                    />
+                  </svg>
+                  Thinking...
+                </>
+              ) : (
+                "Help me Decide"
+              )}
+            </StarBorder>
           </div>
 
           {error && <p className="mt-4 text-red-500 text-sm">{error}</p>}
@@ -734,9 +991,9 @@ export default function Home() {
           {showLoginWall && (
             <div className="mt-6 border border-gray-200 rounded-xl p-6 text-center space-y-3">
               <p className="font-medium text-gray-900">You've used your free debate</p>
-              <p className="text-sm text-gray-500">Sign up free to keep splitting your thoughts</p>
+              <p className="text-sm  dark:text-gray-500 text-gray-600">Sign up free to keep splitting your thoughts</p>
               <SignUpButton mode="modal">
-                <button className="bg-gray-900 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors">
+                <button onClick={persistDraftForAuth} className="bg-gray-900 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors">
                   Sign up free
                 </button>
               </SignUpButton>
@@ -751,8 +1008,8 @@ export default function Home() {
             <div className="bg-gray-50 rounded-xl px-4 py-3 text-sm text-gray-500 dark:bg-zinc-800">
               <span className="font-medium text-gray-700 dark:text-white">Your thought: </span>
               {result.originalThought}
-              <p className="text-xs text-gray-400 mt-2">
-                {new Date(result.timestamp).toLocaleString("en-IN", {
+              <p className="text-xs text-gray-400 mt-2" suppressHydrationWarning>
+                {new Date(normalizeTimestamp(result.timestamp)).toLocaleString("en-IN", {
                   year: "numeric",
                   month: "short",
                   day: "2-digit",
@@ -768,6 +1025,7 @@ export default function Home() {
                 text={result.rationalArgument}
                 start={startLogic}
                 voice="logic"
+                instant={restoreInstant}
                 onDone={() => setLogicDone(true)}
               />
             )}
@@ -778,6 +1036,7 @@ export default function Home() {
                 text={result.emotionalArgument}
                 start={startEmotion}
                 voice="emotion"
+                instant={restoreInstant}
                 onDone={() => setEmotionDone(true)}
               />
             )}
@@ -787,7 +1046,11 @@ export default function Home() {
               <div className="border border-gray-100 rounded-xl p-5 text-center space-y-2">
                 <p className="text-md text-gray-700 dark:text-gray-300 font-bold">Decision</p>
                 <p className="text-base font-bold text-gray-900">
-                  {result?.decision === "SAVE" ? <span className="text-green-600">Yes</span> : <span className="text-red-600">No</span>}
+                  {decisionIsYes(result?.decision) ? (
+                    <span className="text-green-600">Yes</span>
+                  ) : (
+                    <span className="text-red-600">No</span>
+                  )}
                 </p>
                 <p className="text-md dark:text-gray-400 text-gray-700 text-sm pt-1 italic font-serif">{result.reason}</p>
               </div>
@@ -809,6 +1072,7 @@ export default function Home() {
                     text={msg.content}
                     start={true}
                     voice={msg.role}
+                    instant={restoreInstant}
                   />
                 )}
               </div>
@@ -882,13 +1146,13 @@ export default function Home() {
                   </>
                 ) : (
                   <div className="border border-gray-200 rounded-xl p-5 text-center space-y-3">
-                    <p className="font-medium text-gray-900 text-sm">Want to continue the conversation?</p>
+                    <p className="font-medium dark:text-gray-300 text-gray-900 text-sm">Want to continue the conversation?</p>
                     <p className="text-xs text-gray-400">Sign up free to counter argue, save debates and view history</p>
                     <div className="flex gap-2 justify-center">
                         <SignUpButton
                           mode="modal"
                         >
-                          <button className="bg-gray-900 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors cursor-pointer">
+                        <button onClick={persistDraftForAuth} className="bg-gray-900 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors cursor-pointer">
                             Sign up for free
                           </button>
                         </SignUpButton>
@@ -896,7 +1160,7 @@ export default function Home() {
                         <SignInButton
                           mode="modal"
                         >
-                          <button className="border border-gray-200 text-gray-600 px-5 py-2 rounded-lg text-sm font-medium hover:border-gray-400 transition-colors cursor-pointer">
+                          <button onClick={persistDraftForAuth} className="border border-gray-200 text-gray-600 px-5 py-2 rounded-lg text-sm font-medium hover:border-gray-400 transition-colors cursor-pointer">
                             Sign in
                           </button>
                         </SignInButton>

@@ -1,0 +1,26 @@
+You are helping build SplitSense - an AI dilemma solver.
+
+## Stack
+Next.js 14 App Router, TypeScript, Tailwind, Groq API (llama-3.3-70b-versatile), Convex DB, Clerk Auth, Lenis smooth scroll, ReactBits SoftAurora background
+
+## File Structure
+- app/page.tsx → main chat UI with sidebar, typewriter animation, dark mode
+- app/history/page.tsx → saved debates history
+- app/api/debate/route.ts → calls Groq, saves to Convex
+- app/api/followup/route.ts → follow-up conversation
+- lib/ai.ts → Groq client (function named callGemini)
+- lib/types.ts → DebateResult type
+- convex/schema.ts → debates table
+- convex/debates.ts → saveDebate, markAsSaved, getAllDebates, getRecentDebates
+- components/SoftAurora.tsx → aurora background
+- middleware.ts → Clerk auth, protects /history
+
+## Data Shape
+DebateResult: { originalThought, rationalArgument, emotionalArgument, decision: "SAVE"|"FORGET", reason, timestamp, saved?, userId?, expiresAt? }
+
+## Rules
+- Never rewrite entire files, make minimal targeted changes only
+- Always use TypeScript
+- Follow existing code style and naming conventions
+- Dark mode classes must always be included alongside light mode classes
+- Keep Tailwind only, no inline styles

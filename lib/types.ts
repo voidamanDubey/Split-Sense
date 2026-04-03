@@ -1,10 +1,10 @@
-type Decision = "SAVE" | "FORGET"
+import type { StoredDecision } from "./decision"
 
 export interface DebateResult {
   originalThought: string
   rationalArgument: string
   emotionalArgument: string
-  decision: Decision
+  decision: StoredDecision
   reason: string
   timestamp: number
 }

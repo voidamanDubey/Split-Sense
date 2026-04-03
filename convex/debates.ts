@@ -2,6 +2,16 @@ import { internalMutation, mutation, query } from "./_generated/server"
 import { v } from "convex/values"
 import { internal } from "./_generated/api"
 
+function makeShareId() {
+  // URL-safe random id (best-effort).
+  const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+  let out = ""
+  for (let i = 0; i < 22; i++) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)]
+  }
+  return out
+}
+
 function normalizeTimestamp(timestamp: number) {
   // Accept both unix seconds and unix milliseconds.
   return timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
@@ -27,7 +37,12 @@ export const saveDebate = mutation({
     originalThought: v.string(),
     rationalArgument: v.string(),
     emotionalArgument: v.string(),
-    decision: v.union(v.literal("SAVE"), v.literal("FORGET")),
+    decision: v.union(
+      v.literal("YES"),
+      v.literal("NO"),
+      v.literal("SAVE"),
+      v.literal("FORGET")
+    ),
     reason: v.string(),
     timestamp: v.number(),
     saved: v.optional(v.boolean()),
@@ -73,6 +88,45 @@ export const deleteDebate = mutation({
     if (!debate) return
     if (debate.userId !== args.userId) return
     await ctx.db.delete(args.id)
+  },
+})
+
+export const ensureShareLink = mutation({
+  args: { id: v.id("debates"), userId: v.string() },
+  handler: async (ctx, args) => {
+    const debate = await ctx.db.get(args.id)
+    if (!debate) throw new Error("Not found")
+    if (debate.userId !== args.userId) throw new Error("Forbidden")
+    if (debate.shareId) return debate.shareId
+
+    let shareId = makeShareId()
+    // Avoid collisions (very unlikely, but safe).
+    for (let i = 0; i < 5; i++) {
+      const existing = await ctx.db
+        .query("debates")
+        .filter((q) => q.eq(q.field("shareId"), shareId))
+        .first()
+      if (!existing) break
+      shareId = makeShareId()
+    }
+
+    await ctx.db.patch(args.id, { shareId })
+    return shareId
+  },
+})
+
+export const getDebateByShareId = query({
+  args: { shareId: v.string() },
+  handler: async (ctx, args) => {
+    const debate = await ctx.db
+      .query("debates")
+      .filter((q) => q.eq(q.field("shareId"), args.shareId))
+      .first()
+    if (!debate) return null
+    return {
+      ...debate,
+      timestamp: normalizeTimestamp(debate.timestamp),
+    }
   },
 })
 

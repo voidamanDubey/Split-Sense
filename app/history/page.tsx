@@ -59,18 +59,17 @@ export default function HistoryPage() {
       <aside
         onMouseEnter={() => setIsSidebarHovered(true)}
         onMouseLeave={() => setIsSidebarHovered(false)}
-        data-lenis-prevent
-        className={`group 
+        className={`group flex flex-col
           border-r border-gray-100 dark:border-zinc-800 
           bg-gray-50/70 dark:bg-zinc-900/80 
-          sticky top-0 h-screen overflow-y-auto 
+          sticky top-0 h-screen min-h-0 overflow-hidden 
           transition-all duration-500 ease-in-out ${
             isSidebarExpanded ? "w-72 px-3 py-4" : "w-16 px-2 py-4"
         }`}
       >
 
         {/* Logo + Toggle */}
-        <div className="mt-2 mb-4">
+        <div className="mt-2 mb-4 shrink-0">
           {isSidebarExpanded ? (
             <div className="relative px-2 py-2 rounded-md hover:bg-gray-200 dark:hover:bg-zinc-800 transition-colors">
               <div className="flex items-center">
@@ -99,7 +98,7 @@ export default function HistoryPage() {
 
         {isSidebarExpanded ? (
           <>
-            <div className="mb-4">
+            <div className="mb-4 shrink-0">
               <Link
                 href="/"
                 className="block w-full bg-gray-900 text-white dark:bg-white dark:text-black py-2 rounded-lg text-sm font-medium text-center hover:bg-gray-700 dark:hover:bg-gray-200 transition-colors"
@@ -108,7 +107,7 @@ export default function HistoryPage() {
               </Link>
             </div>
 
-            <div className="mb-4">
+            <div className="mb-4 shrink-0">
               <Link
                 href="/history"
                 className="flex items-center gap-2 text-sm font-medium px-2 py-2 rounded-md 
@@ -120,11 +119,14 @@ export default function HistoryPage() {
               </Link>
             </div>
 
-            <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 px-2 mb-2">
+            <p className="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500 px-2 mb-2 shrink-0">
               Recent chats
             </p>
 
-            <div className="space-y-1">
+            <div
+              data-lenis-prevent
+              className="min-h-0 flex-1 overflow-y-auto space-y-1 overscroll-contain"
+            >
               {recentDebates?.map((debate) => (
                 <Link
                   key={debate._id}
@@ -186,6 +188,12 @@ export default function HistoryPage() {
             </SignInButton>
           )}
         </div>
+        <div className="px-6 py-4">
+        <Link href="/" className="text-lg text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
+            ← 
+          </Link>
+        </div>
+        
 
         {/* Content */}
         <div className="max-w-2xl mx-auto pt-16 pb-10">

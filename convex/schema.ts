@@ -6,11 +6,17 @@ export default defineSchema({
     originalThought: v.string(),
     rationalArgument: v.string(),
     emotionalArgument: v.string(),
-    decision: v.union(v.literal("SAVE"), v.literal("FORGET")),
+    decision: v.union(
+      v.literal("YES"),
+      v.literal("NO"),
+      v.literal("SAVE"),
+      v.literal("FORGET")
+    ),
     reason: v.string(),
     timestamp: v.number(),
     saved: v.optional(v.boolean()),
     expiresAt: v.optional(v.number()),
     userId: v.optional(v.string()),
+    shareId: v.optional(v.string()),
   }),
 })

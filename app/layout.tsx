@@ -13,6 +13,9 @@ const geist = Geist({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "SplitSense",
   description: "Let logic and emotion decide",
+  // icons: {
+  //   icon: "/squares-exclude.png",
+  // },
 }
 
 export default function RootLayout({
@@ -23,7 +26,7 @@ export default function RootLayout({
   return (
     <ClerkProvider>
       <html lang="en" className={cn("font-sans", inter.variable)} suppressHydrationWarning>
-        <body className={geist.className}>
+        <body className={geist.className} suppressHydrationWarning>
           <ThemeProvider>
             <ConvexClientProvider>{children}</ConvexClientProvider>
           </ThemeProvider>
