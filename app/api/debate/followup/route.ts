@@ -12,7 +12,7 @@ what they want to hear. Challenge their thinking directly if needed.
 Infer the core choice in the dilemma. Return ONLY a raw JSON object with these exact keys:
 - logicReply: 2-3 sentences responding from pure logic to the user's counter
 - emotionReply: 2-3 sentences responding from pure emotion to the user's counter
-- decision: exactly "YES" or "NO" — whether they should take the affirmative path implied by the dilemma after this latest exchange (based on combined weight of logicReply and emotionReply; if those conflict, pick YES only if the affirmative path is still overall justified).
+- decision: exactly "YES", "NO", or "RESOLVED". Use "YES" or "NO" to indicate whether they should take the affirmative path (based on combined weight of logicReply and emotionReply; if those conflict, pick YES only if the affirmative path is still overall justified). Use "RESOLVED" ONLY when the user shows clear peaceful closure like "ok I won't", "thanks", "you're right", "that makes sense", "I'll think about it". Do NOT use "RESOLVED" for defiance or rebellion like "I'll do it anyway", "I don't care", "screw it" — those get a firm YES or NO with a stronger pushback.
 - reason: direct. Use exactly ONE of these shapes:
   - If logic and emotion align: "Both emotionally and logically, you should <action>."
   - If they conflict: "Emotionally, you should <action>. Logically, you should <action>."
@@ -64,7 +64,7 @@ function extractJsonObject(text: string) {
     return JSON.parse(cleaned) as {
       logicReply: string
       emotionReply: string
-      decision: "YES" | "NO" | "SAVE" | "FORGET"
+      decision: "YES" | "NO" | "SAVE" | "FORGET" | "RESOLVED"
       reason: string
     }
   } catch {
@@ -75,7 +75,7 @@ function extractJsonObject(text: string) {
       return JSON.parse(sliced) as {
         logicReply: string
         emotionReply: string
-        decision: "YES" | "NO" | "SAVE" | "FORGET"
+        decision: "YES" | "NO" | "SAVE" | "FORGET" | "RESOLVED"
         reason: string
       }
     }
@@ -98,7 +98,7 @@ function parseFollowupLenient(text: string) {
   if (logicField && emotionField) {
     const logicReply = stripDecisionLeak((logicField[1] || logicField[2] || logicField[3] || "").trim())
     const emotionReply = stripDecisionLeak((emotionField[1] || emotionField[2] || emotionField[3] || "").trim())
-    const decisionMatch = cleaned.match(/["']?decision["']?\s*[:=-]\s*["']?(YES|NO|SAVE|FORGET)["']?/i)
+    const decisionMatch = cleaned.match(/["']?decision["']?\s*[:=-]\s*["']?(YES|NO|SAVE|FORGET|RESOLVED)["']?/i)
     const reasonMatch = cleaned.match(
       /["']?reason["']?\s*[:=-]\s*(?:"([^"]+)"|'([^']+)'|([\s\S]*?))(?=$|\n\s*["']?[A-Za-z_])/i
     )
@@ -161,7 +161,7 @@ export async function POST(request: Request) {
     let parsed: {
       logicReply: string
       emotionReply: string
-      decision: "YES" | "NO"
+      decision: "YES" | "NO" | "RESOLVED"
       reason: string
     }
     try {

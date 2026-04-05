@@ -18,5 +18,10 @@ export default defineSchema({
     expiresAt: v.optional(v.number()),
     userId: v.optional(v.string()),
     shareId: v.optional(v.string()),
+    messages: v.optional(v.array(v.object({
+      role: v.string(),
+      content: v.string(),
+      decision: v.optional(v.string()),
+    }))),
   }),
 })

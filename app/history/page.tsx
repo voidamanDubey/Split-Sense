@@ -1,13 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery } from "convex/react"
 import { api } from "@/convex/_generated/api"
-import { useUser, UserButton, SignInButton } from "@clerk/nextjs"
+import { useUser, UserButton, SignInButton, SignUpButton } from "@clerk/nextjs"
 import Link from "next/link"
 import { History, PanelLeftClose, PanelLeftOpen, Plus, SquaresExclude, Trash2 } from "lucide-react"
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler"
 import { useTheme } from "next-themes"
+
 
 //background imports
 import SoftAurora from "../components/SoftAurora/SoftAurora"
@@ -29,6 +30,14 @@ export default function HistoryPage() {
     user?.id ? { userId: user.id, limit: 20 } : "skip"
   )
 
+
+  const [auroraKey, setAuroraKey] = useState(0)
+  useEffect(() => {
+  const handleFocus = () => setAuroraKey(prev => prev + 1)
+  window.addEventListener("focus", handleFocus)
+  return () => window.removeEventListener("focus", handleFocus)
+}, [])
+
   const deleteDebate = useMutation(api.debates.deleteDebate)
   const isSidebarExpanded = isSidebarPinnedOpen || isSidebarHovered
 
@@ -36,7 +45,7 @@ export default function HistoryPage() {
     <main className="relative min-h-screen bg-transparent text-gray-900 dark:text-white flex transition-colors duration-300">
 
      {/* Background 1*/}
-     <div className="fixed inset-0 -z-10">
+     <div key={auroraKey} className="fixed inset-0 -z-10">
         <SoftAurora
           speed={0.4}
           scale={1.5}
@@ -212,6 +221,25 @@ export default function HistoryPage() {
             />
             </h1>
 
+            {!user && (
+              <div className="border border-gray-200 rounded-xl p-5 text-center space-y-3">
+                <p className="font-medium dark:text-gray-300 text-gray-900 text-sm">Sign up to see History</p>
+                <p className="text-xs text-gray-400">Sign up for free to save debates and view history</p>
+                <div className="flex gap-2 justify-center">
+                  <SignUpButton mode="modal" fallbackRedirectUrl={"/history"}>
+                    <button className="bg-gray-900 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors cursor-pointer">
+                      Sign up for free
+                    </button>
+                  </SignUpButton>
+                  <SignInButton mode="modal" forceRedirectUrl={"/history"}>
+                    <button className="border border-gray-200 text-gray-600 px-5 py-2 rounded-lg text-sm font-medium hover:border-gray-400 transition-colors cursor-pointer">
+                      Sign in
+                    </button>
+                  </SignInButton>
+                </div>
+              </div>
+            )}
+
           {debates?.length === 0 && (
             <p className="text-gray-400 dark:text-gray-500 text-center py-20">
               No saved debates yet.
@@ -239,7 +267,7 @@ export default function HistoryPage() {
 
                   <button
                     onClick={() => user?.id && deleteDebate({ id: debate._id, userId: user.id })}
-                    className="p-1.5 rounded-md border border-gray-200 dark:border-zinc-700 
+                    className="p-1.5 rounded-md dark:border-zinc-700 
                     text-gray-500 dark:text-gray-400 
                     hover:text-red-600 hover:border-red-200 border border-black dark:hover:border-red-400/40 transition-colors"
                   >
@@ -255,8 +283,7 @@ export default function HistoryPage() {
                       {/* LOGIC */}
                 <div className="rounded-2xl p-5 
                   bg-blue-50
-                  bg-gradient-to-br from-blue-500/10 to-transparent 
-                  border border-blue-100
+                  bg-linear-to-br from-blue-500/10 to-transparent 
                   border border-blue-500/40 
                   dark:bg-blue-900/30 
                   dark:shadow-[0_0_20px_rgba(59,130,246,0.1)]
@@ -268,7 +295,7 @@ export default function HistoryPage() {
                     Logic
                   </p>
 
-                  <p className="text-sm text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
+                  <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
                     {debate.rationalArgument}
                   </p>
                 </div>
@@ -276,8 +303,7 @@ export default function HistoryPage() {
                       {/* EMOTION */}
                 <div className="rounded-2xl p-5
                   bg-amber-50 
-                  bg-gradient-to-br from-amber-500/10 to-transparent 
-                  border border-amber-100
+                  bg-linear-to-br from-amber-500/10 to-transparent 
                   border border-amber-500/40 
                    dark:bg-amber-900/30 
                    dark:shadow-[0_0_20px_rgba(59,130,246,0.1)]
@@ -289,7 +315,7 @@ export default function HistoryPage() {
                     Emotion
                   </p>
 
-                  <p className="text-sm text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
                     {debate.emotionalArgument}
                   </p>
                 </div>

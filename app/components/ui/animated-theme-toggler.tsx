@@ -2,7 +2,7 @@
 
 import { useTheme } from "next-themes"
 import { motion } from "framer-motion"
-import { Sun, Moon } from "lucide-react"
+import { Sun, Moon, Pointer } from "lucide-react"
 import { useEffect, useState } from "react"
 
 export function AnimatedThemeToggler() {
@@ -21,6 +21,7 @@ export function AnimatedThemeToggler() {
   return (
     <button
       onClick={() => setTheme(isDark ? "light" : "dark")}
+      style={{cursor: "pointer"}}
       className="relative flex items-center justify-center w-12 h-12 rounded-full bg-zinc-200 dark:bg-zinc-800 transition-colors"
     >
       <motion.div

@@ -166,7 +166,22 @@ export const getRecentDebates = query({
         decision: d.decision,
         reason: d.reason,
         timestamp: normalizeTimestamp(d.timestamp),
+        messages: d.messages, 
       }))
+  },
+})
+
+export const updateMessages = mutation({
+  args: {
+    id: v.id("debates"),
+    messages: v.array(v.object({
+      role: v.string(),
+      content: v.string(),
+      decision: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { messages: args.messages })
   },
 })
 
