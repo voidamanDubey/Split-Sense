@@ -1,6 +1,6 @@
 import Groq from "groq-sdk"
 import type { DebateResult } from "./types"
-import { normalizeDecision } from "./decision"
+import { normalizeDecision, StoredDecision } from "./decision"
 
 const SYSTEM_INSTRUCTION = `You are SplitSense. The user gives you a thought or dilemma.
 Be boldly honest and completely non-biased. Do not sugarcoat or tell the user 
@@ -48,6 +48,7 @@ export async function callGemini(userThought: string): Promise<DebateResult> {
 
   const parsed = JSON.parse(jsonText) as DebateResult
   parsed.timestamp = Date.now()
-  parsed.decision = normalizeDecision(String(parsed.decision ?? ""))
+  const normaziled = normalizeDecision(String(parsed.decision ?? ""))
+  parsed.decision = (normaziled == "YES" ? "YES" : "NO") as StoredDecision
   return parsed
 }
