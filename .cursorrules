@@ -1,7 +1,7 @@
 You are helping build SplitSense - an AI dilemma solver.
 
 ## Stack
-Next.js 14 App Router, TypeScript, Tailwind, Groq API (llama-3.3-70b-versatile), Convex DB, Clerk Auth, Lenis smooth scroll, ReactBits SoftAurora background
+Next.js 14 App Router, TypeScript, Tailwind, Groq API (llama-3.3-70b-versatile)->(this model is depreciiateed changing it into) -> (openai/gpt-oss-120b), Convex DB, Clerk Auth, Lenis smooth scroll, ReactBits SoftAurora background
 
 ## File Structure
 - app/page.tsx → main chat UI with sidebar, typewriter animation, dark mode

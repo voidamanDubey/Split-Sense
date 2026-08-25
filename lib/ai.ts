@@ -1,6 +1,6 @@
 import Groq from "groq-sdk"
 import type { DebateResult } from "./types"
-import { normalizeDecision, StoredDecision } from "./decision"
+import { normalizeDecision } from "./decision"
 
 const SYSTEM_INSTRUCTION = `You are SplitSense. The user gives you a thought or dilemma.
 Be boldly honest and completely non-biased. Do not sugarcoat or tell the user 
@@ -32,7 +32,7 @@ export async function callGemini(userThought: string): Promise<DebateResult> {
   const groq = new Groq({ apiKey })
 
   const completion = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+    model: "openai/gpt-oss-120b",
     messages: [
       { role: "system", content: SYSTEM_INSTRUCTION },
       { role: "user", content: userThought }
@@ -48,7 +48,6 @@ export async function callGemini(userThought: string): Promise<DebateResult> {
 
   const parsed = JSON.parse(jsonText) as DebateResult
   parsed.timestamp = Date.now()
-  const normaziled = normalizeDecision(String(parsed.decision ?? ""))
-  parsed.decision = (normaziled == "YES" ? "YES" : "NO") as StoredDecision
+  parsed.decision = normalizeDecision(String(parsed.decision ?? ""))
   return parsed
 }

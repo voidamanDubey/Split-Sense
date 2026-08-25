@@ -28,9 +28,10 @@ import { useTheme } from "next-themes"
 
 
 
-type Message =
-| { role: "user" | "logic" | "emotion" | "system"; content: string; decision?: never }
-| { role: "decision"; content: string; decision: string }
+type Message = {
+  role: "user" | "logic" | "emotion" | "system"
+  content: string
+}
 
 type RecentChat = {
   _id: string
@@ -40,7 +41,6 @@ type RecentChat = {
   decision: StoredDecision
   reason: string
   timestamp: number
-  messages?: Message[]
 }
 
 function normalizeTimestamp(ts: number) {
@@ -114,7 +114,7 @@ function TypingBubble({
 
   return (
     <div
-      className={`rounded-xl p-4 animate-[fadeIn_0.350s_ease-in] will-change-transform
+      className={`rounded-xl p-4 
       ${isLogic
         ? "bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-800 dark:shadow-[0_0_20px_rgba(59,130,246,0.1)]"
         : "bg-amber-50 dark:bg-amber-900/30 border border-amber-100 dark:border-amber-800 dark:shadow-[0_0_20px_rgba(59,130,246,0.1)]"
@@ -170,9 +170,7 @@ export default function Home() {
   const [showDecision, setShowDecision] = useState(false)
   const [restoreInstant, setRestoreInstant] = useState(false)
   const { theme } = useTheme();
-  const [pendingDecision, setPendingDecision] = useState<{ content: string; decision: string } | null>(null)
-  const [pendingEmotion, setPendingEmotion] = useState<string | null>(null)
-  const [isRestoredChat, setIsRestoredChat] = useState(false)
+
   
 
 
@@ -180,7 +178,6 @@ export default function Home() {
   const markAsSaved = useMutation(api.debates.markAsSaved)
   const deleteDebateMutation = useMutation(api.debates.deleteDebate)
   const ensureShareLinkMutation = useMutation(api.debates.ensureShareLink)
-  const updateMessagesMutation = useMutation(api.debates.updateMessages)
   const recentDebates = useQuery(
     api.debates.getRecentDebates,
     user?.id ? { userId: user.id, limit: 20 } : "skip"
@@ -342,7 +339,6 @@ export default function Home() {
     setIsSaved(false)
     setChatStatus("active")
     setShowLoginWall(false)
-    setIsRestoredChat(false)
     const thoughtSnapshot = thought.trim()
     const tempId = `temp-${Date.now()}`
     setOptimisticRecent((prev) => [
@@ -441,7 +437,6 @@ export default function Home() {
         throw new Error(err?.error || "Something went wrong")
       }
       const data = await res.json()
-      console.log("followup data:", data.decision, data.reason)
 
       setResult((prev) => {
         const base: DebateResult =
@@ -461,37 +456,13 @@ export default function Home() {
           reason: data.reason ?? base.reason,
         }
       })
-     // store pending decision to show after animation
-      setPendingDecision({ content: data.reason, decision: data.decision })
-      setPendingEmotion(data.emotionReply)  // ← store emotion separately so it loads in sequance
-      setMessages((prev: Message[]) => [
+      setMessages((prev) => [
         ...prev,
-        { role: "logic" as const, content: data.logicReply },
-        // { role: "emotion" as const, content: data.emotionReply },
+        { role: "logic", content: data.logicReply },
+        { role: "emotion", content: data.emotionReply },
       ])
-        // save full conversation to Convex
-        if (savedId) {
-          const updatedMessages = [
-            { role: "logic" as const, content: result?.rationalArgument ?? "" },
-            { role: "emotion" as const, content: result?.emotionalArgument ?? "" },
-            { role: "decision" as const, content: result?.reason ?? "", decision: String(result?.decision ?? "") }, 
-            ...messages.slice(2),
-            { role: "user" as const, content: userMessage },
-            { role: "logic" as const, content: data.logicReply },
-            { role: "emotion" as const, content: data.emotionReply },
-            { role: "decision" as const, content: data.reason, decision: data.decision },
-          ]
-          updateMessagesMutation({
-            id: savedId as any,
-            messages: updatedMessages,
-          })
-          .then(() => console.log("✅ messages saved to Convex:", updatedMessages.length))
-          .catch((e) => console.log("❌ failed to save messages:", e))
-        }
-      setTimeout(() => {
-        setShowDecision(true)
-        setShowActions(true)
-      }, 50)
+      setShowDecision(true)
+      setShowActions(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to get a response. Please try again.")
     } finally {
@@ -529,7 +500,6 @@ export default function Home() {
     setActiveChatId(null)
     setIsSaved(false)
     setChatStatus("active")
-    setIsRestoredChat(false)
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
@@ -541,10 +511,8 @@ export default function Home() {
     decision: StoredDecision
     reason: string
     timestamp: number
-    messages?: Message[]
   }) {
     setActiveChatId(debate._id)
-    setSavedId(debate._id)
     setThought(debate.originalThought)
     setResult({
       originalThought: debate.originalThought,
@@ -554,18 +522,11 @@ export default function Home() {
       reason: debate.reason,
       timestamp: debate.timestamp,
     })
-    setRestoreInstant(true)
-     // if full conversation exists use it, otherwise just show initial response
-      // if (debate.messages && debate.messages.length > 0) {
-      //   setMessages(debate.messages as Message[])
-      // } else {
-      //   setMessages([
-      //     { role: "logic", content: debate.rationalArgument },
-      //     { role: "emotion", content: debate.emotionalArgument },
-      //   ])
-      // }
-    setIsRestoredChat(true)
-    setShowDecision(false)
+    setMessages([
+      { role: "logic", content: debate.rationalArgument },
+      { role: "emotion", content: debate.emotionalArgument },
+    ])
+    setShowDecision(true)
     setShowActions(true)
     setStartLogic(false)
     setStartEmotion(false)
@@ -574,27 +535,6 @@ export default function Home() {
     setChatStatus("active")
     setIsSaved(false)
     setError("")
-
-    if (debate.messages && debate.messages.length > 0) {
-      setMessages(debate.messages as Message[])
-    } else {
-      setMessages([
-        { role: "logic", content: debate.rationalArgument },
-        { role: "emotion", content: debate.emotionalArgument },
-      ])
-    }
-  
-    // set result LAST
-    setResult({
-      originalThought: debate.originalThought,
-      rationalArgument: debate.rationalArgument,
-      emotionalArgument: debate.emotionalArgument,
-      decision: debate.decision,
-      reason: debate.reason,
-      timestamp: debate.timestamp,
-    })
-    
-    setTimeout(() => setRestoreInstant(false), 100)
   }
 
   async function handleShareCurrentChat() {
@@ -613,7 +553,7 @@ export default function Home() {
     await navigator.clipboard.writeText(url)
   }
 
-  const conversationMessages = isRestoredChat ? messages : messages.slice(2)
+  const conversationMessages = messages.slice(2)
   const recentMerged = [
     ...optimisticRecent.filter(
       (item) => !recentDebates?.some((d) => String(d._id) === String(item._id))
@@ -765,8 +705,6 @@ export default function Home() {
                       decision: debate.decision,
                       reason: debate.reason,
                       timestamp: debate.timestamp,
-                      messages: debate.messages as Message[] | undefined,
-                      // saved: debate.saved, 
                     })
                   }}
                   onKeyDown={(e) => {
@@ -775,7 +713,7 @@ export default function Home() {
                       ;(e.currentTarget as HTMLDivElement).click()
                     }
                   }}
-                  className={`group w-full select-none text-left px-2 py-2 rounded-md transition-colors ${
+                  className={`group w-full cursor-pointer select-none text-left px-2 py-2 rounded-md transition-colors ${
                     activeChatId === debate._id
                       ? "bg-gray-200 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700"
                       : "hover:bg-gray-200 dark:hover:bg-zinc-800"
@@ -822,7 +760,7 @@ export default function Home() {
                           setEditingChatTitle(displayTitle)
                         }}
                       >
-                        <Pencil className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300 cursor-pointer" />
+                        <Pencil className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
                       </button>
                       <button
                         type="button"
@@ -845,7 +783,7 @@ export default function Home() {
                           await navigator.clipboard.writeText(url)
                         }}
                       >
-                        <MessageSquareShare className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300 cursor-pointer" />
+                        <MessageSquareShare className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
                       </button>
                       <button
                         type="button"
@@ -864,7 +802,7 @@ export default function Home() {
                           await deleteDebateMutation({ id: idToDelete as any, userId: user.id })
                         }}
                       >
-                        <Trash2 className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300 cursor-pointer" />
+                        <Trash2 className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
                       </button>
                     </div>
                   </div>
@@ -914,7 +852,6 @@ export default function Home() {
         <div className="flex items-center justify-between px-6 py-4 
             sticky top-0 z-10 
             bg-white/60 dark:bg-zinc-900/60 
-            shadow-[0_6px_8px_-6px_rgba(0,0,0,0.1)]
             backdrop-blur-md 
             border-b border-white/10 dark:border-white/5 
             transition-colors duration-300">
@@ -995,8 +932,6 @@ export default function Home() {
               }}
               placeholder="Should I quit my job and start a startup..."
               rows={4}
-              disabled={loading || !!result}
-              readOnly={!!result}
               className="w-full border border-gray-200 dark:border-zinc-700 
               rounded-xl px-4 py-3 
               text-gray-900 dark:text-white 
@@ -1008,7 +943,7 @@ export default function Home() {
             <StarBorder
               as="button"
               onClick={handleSubmit}
-              disabled={loading || !!result || !thought.trim()}
+              disabled={loading || !thought.trim()}
               color="#baf9ff"
               speed="5s"
               className="w-full min-w-[180px] 
@@ -1108,7 +1043,7 @@ export default function Home() {
 
             {/* Decision */}
             {showDecision && (
-              <div key={`decision-${messages.length}`} className="border border-gray-100 rounded-xl p-5 text-center space-y-2">
+              <div className="border border-gray-100 rounded-xl p-5 text-center space-y-2">
                 <p className="text-md text-gray-700 dark:text-gray-300 font-bold">Decision</p>
                 <p className="text-base font-bold text-gray-900">
                   {decisionIsYes(result?.decision) ? (
@@ -1138,47 +1073,7 @@ export default function Home() {
                     start={true}
                     voice={msg.role}
                     instant={restoreInstant}
-                    onDone={
-                      msg.role === "logic" && i === conversationMessages.length - 1
-                        ? () => {
-                            if (pendingEmotion) {
-                              setMessages((prev: Message[]) => [
-                                ...prev,
-                                { role: "emotion" as const, content: pendingEmotion },
-                              ])
-                              setPendingEmotion(null)
-                            }
-                          }
-                        : msg.role === "emotion" && i === conversationMessages.length - 1
-                        ? () => {
-                            if (pendingDecision) {
-                              setMessages((prev: Message[]) => [
-                                ...prev,
-                                { role: "decision" as const, content: pendingDecision.content, decision: pendingDecision.decision },
-                              ])
-                              setPendingDecision(null)
-                            }
-                          }
-                        : undefined
-                    }
                   />
-                )}
-                {msg.role === "decision" && (
-                  <div className="border border-gray-100 rounded-xl p-5 text-center space-y-2">
-                    <p className="text-md text-gray-700 dark:text-gray-300 font-bold">Decision</p>
-                    {msg.decision !== "RESOLVED" && (
-                      <p className="text-base font-bold">
-                        {msg.decision === "YES" || msg.decision === "SAVE" ? (
-                          <span className="text-green-600">Yes</span>
-                        ) : (
-                          <span className="text-red-600">No</span>
-                        )}
-                      </p>
-                    )}
-                    <p className="text-md dark:text-gray-400 text-gray-700 text-sm pt-1 italic font-serif">
-                      {msg.content}
-                    </p>
-                  </div>
                 )}
               </div>
             ))}
@@ -1252,7 +1147,7 @@ export default function Home() {
                 ) : (
                   <div className="border border-gray-200 rounded-xl p-5 text-center space-y-3">
                     <p className="font-medium dark:text-gray-300 text-gray-900 text-sm">Want to continue the conversation?</p>
-                    <p className="text-xs text-gray-400">Sign up for free to counter argue, save debates and view history</p>
+                    <p className="text-xs text-gray-400">Sign up free to counter argue, save debates and view history</p>
                     <div className="flex gap-2 justify-center">
                         <SignUpButton
                           mode="modal"
@@ -1304,7 +1199,7 @@ export default function Home() {
         </div>
 
         {/* Theme Toggler */}
-        <div className="fixed bottom-6 right-6 z-50 *:cursor-pointer">
+        <div className="fixed bottom-6 right-6 z-50">
           <AnimatedThemeToggler />
         </div>
         
